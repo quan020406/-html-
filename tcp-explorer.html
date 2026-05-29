@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TCP Explorer — 三次握手与四次挥手</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0f172a;
+  --bg-card: #1e293b;
+  --border: #334155;
+  --text: #e2e8f0;
+  --text-dim: #94a3b8;
+  --text-faint: #64748b;
+  --cyan: #22d3ee;
+  --emerald: #34d399;
+  --violet: #a78bfa;
+  --amber: #fbbf24;
+  --rose: #fb7185;
+  --blue: #60a5fa;
+  --radius: 8px;
+  --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', 'PingFang SC', monospace;
+  min-height: 100vh;
+  line-height: 1.6;
+}
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+/* Header */
+header {
+  text-align: center;
+  padding: 32px 0 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+header h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.02em;
+}
+header p {
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 4px;
+  margin-bottom: 24px;
+}
+.tab-btn {
+  flex: 1;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active {
+  background: rgba(34, 211, 238, 0.12);
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* Module 1: 握手模拟器 */
+.sim-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  margin-bottom: 24px;
+}
+.actor-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  text-align: center;
+  border: 2px solid var(--border);
+  transition: var(--transition);
+  position: relative;
+}
+.actor-card.client { border-color: var(--cyan); }
+.actor-card.server { border-color: var(--emerald); }
+.actor-card.active { box-shadow: 0 0 20px rgba(34,211,238,0.25); }
+.actor-card .name { font-size: 1rem; font-weight: 700; }
+.actor-card.client .name { color: var(--cyan); }
+.actor-card.server .name { color: var(--emerald); }
+.actor-card .state {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(30,41,59,0.8);
+  border: 1px solid var(--border);
+  transition: var(--transition);
+}
+.actor-card.client .state.established { border-color: var(--emerald); color: var(--emerald); }
+.actor-card.client .state.synsent { border-color: var(--amber); color: var(--amber); }
+.actor-card.client .state.finwait1 { border-color: var(--amber); color: var(--amber); }
+.actor-card.client .state.finwait2 { border-color: var(--amber); color: var(--amber); }
+.actor-card.client .state.timewait { border-color: var(--blue); color: var(--blue); }
+.actor-card.client .state.closed { border-color: var(--text-faint); color: var(--text-faint); }
+.actor-card.client .state.closing { border-color: var(--rose); color: var(--rose); }
+.actor-card.server .state.listen { border-color: var(--text-faint); color: var(--text-faint); }
+.actor-card.server .state.synrcvd { border-color: var(--amber); color: var(--amber); }
+.actor-card.server .state.established { border-color: var(--emerald); color: var(--emerald); }
+.actor-card.server .state.closewait { border-color: var(--rose); color: var(--rose); }
+.actor-card.server .state.lastack { border-color: var(--rose); color: var(--rose); }
+.actor-card.server .state.closed { border-color: var(--text-faint); color: var(--text-faint); }
+
+/* Message timeline */
+.timeline {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-height: 200px;
+  position: relative;
+  overflow-y: auto;
+  max-height: 400px;
+}
+.msg-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(51,65,85,0.5);
+  animation: fadeIn 0.4s ease;
+}
+.msg-line .step-num {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: rgba(59,130,246,0.2);
+  border: 1px solid var(--blue);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; font-weight: 600; color: var(--blue);
+  flex-shrink: 0;
+}
+.msg-line .direction { font-size: 0.7rem; color: var(--text-faint); width: 50px; flex-shrink: 0; }
+.msg-line .flags {
+  font-size: 0.8rem; font-weight: 700;
+  width: 100px; flex-shrink: 0;
+}
+.msg-line .seq-ack {
+  font-size: 0.7rem; color: var(--text-dim);
+  flex: 1;
+}
+
+/* Controls */
+.controls {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  margin-top: 16px;
+}
+.btn {
+  padding: 8px 20px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.btn:hover { border-color: var(--cyan); color: var(--cyan); }
+.btn.primary {
+  background: rgba(34,211,238,0.15);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.btn.primary:hover { background: rgba(34,211,238,0.25); }
+.speed-select {
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+/* Module 2: 状态机 */
+.state-machine-svg {
+  width: 100%;
+  overflow: auto;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+/* Module 3: 抓包解析器 */
+.analyzer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.input-panel, .output-panel {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.input-group {
+  margin-bottom: 12px;
+}
+.input-group label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.input-group input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8rem;
+}
+.input-group input:focus { outline: none; border-color: var(--cyan); }
+.flags-row {
+  display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0;
+}
+.flag-check {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 0.75rem; color: var(--text-dim); cursor: pointer;
+}
+.flag-check input { accent-color: var(--cyan); }
+.preset-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.preset-btns .btn { font-size: 0.7rem; padding: 6px 14px; }
+.result-item {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(51,65,85,0.5);
+}
+.result-item .label { font-size: 0.7rem; color: var(--text-faint); }
+.result-item .value { font-size: 0.9rem; font-weight: 600; margin-top: 2px; }
+.result-item .value.phase-syn { color: var(--cyan); }
+.result-item .value.phase-synack { color: var(--emerald); }
+.result-item .value.phase-ack { color: var(--violet); }
+.result-item .value.phase-fin { color: var(--rose); }
+.result-item .value.phase-estab { color: var(--emerald); }
+.result-item .value.phase-rst { color: #f43f5e; }
+
+/* Detail Card */
+.detail-card {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  min-width: 320px;
+  max-width: 480px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  z-index: 100;
+  display: none;
+}
+.detail-card.show { display: block; }
+.detail-card .close-btn {
+  position: absolute; top: 12px; right: 16px;
+  background: none; border: none; color: var(--text-dim);
+  font-size: 1.2rem; cursor: pointer;
+}
+.detail-card h3 { font-size: 1rem; margin-bottom: 8px; }
+.detail-card .info-row { margin: 8px 0; font-size: 0.8rem; }
+.detail-card .info-row span:first-child { color: var(--text-faint); }
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); z-index: 99; display: none;
+}
+.overlay.show { display: block; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(34,211,238,0.3); }
+  50% { box-shadow: 0 0 24px rgba(34,211,238,0.6); }
+}
+
+.state-node { cursor: pointer; transition: all var(--transition); }
+.state-node:hover { filter: drop-shadow(0 0 12px currentColor); }
+.state-node text { pointer-events: none; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sim-container { grid-template-columns: 1fr; }
+  .analyzer-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="overlay" id="overlay"></div>
+<div class="detail-card" id="detailCard">
+  <button class="close-btn" onclick="closeDetail()">&times;</button>
+  <div id="detailContent"></div>
+</div>
+
+<div class="container">
+<header>
+  <h1>TCP Explorer</h1>
+  <p>三次握手与四次挥手交互可视化</p>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="sim">握手模拟器</button>
+  <button class="tab-btn" data-tab="sm">状态机</button>
+  <button class="tab-btn" data-tab="analyzer">抓包解析器</button>
+</div>
+
+<!-- Panel 1 -->
+<div class="panel active" id="panel-sim">
+  <div class="sim-container">
+    <div class="actor-card client" id="clientCard">
+      <div class="name">客户端</div>
+      <div class="state closed" id="clientState">CLOSED</div>
+      <div style="font-size:0.7rem;color:var(--text-faint);margin-top:4px;">主动关闭方</div>
+    </div>
+    <div class="actor-card server" id="serverCard">
+      <div class="name">服务器</div>
+      <div class="state listen" id="serverState">LISTEN</div>
+      <div style="font-size:0.7rem;color:var(--text-faint);margin-top:4px;">被动打开方</div>
+    </div>
+  </div>
+  <div class="timeline" id="timeline">
+    <div style="color:var(--text-faint);text-align:center;padding:40px;">点击"开始"启动握手...</div>
+  </div>
+  <div class="controls">
+    <button class="btn primary" id="btnNext" onclick="nextStep()">开始握手</button>
+    <button class="btn" onclick="resetSim()">重置</button>
+    <button class="btn" id="btnAuto" onclick="toggleAuto()">自动播放</button>
+    <select class="speed-select" id="speedSelect" onchange="updateSpeed()">
+      <option value="1500">1x</option>
+      <option value="800" selected>2x</option>
+      <option value="400">4x</option>
+      <option value="200">8x</option>
+    </select>
+  </div>
+</div>
+
+<!-- Panel 2: 状态机 -->
+<div class="panel" id="panel-sm">
+  <div class="state-machine-svg" id="stateMachineContainer"></div>
+</div>
+
+<!-- Panel 3: 抓包解析器 -->
+<div class="panel" id="panel-analyzer">
+  <div class="analyzer-grid">
+    <div class="input-panel">
+      <h3 style="font-size:0.95rem;margin-bottom:16px;color:var(--cyan);">报文输入</h3>
+      <div class="input-group">
+        <label>源端口</label>
+        <input type="number" id="srcPort" value="52341" placeholder="e.g. 52341">
+      </div>
+      <div class="input-group">
+        <label>目的端口</label>
+        <input type="number" id="dstPort" value="443" placeholder="e.g. 443">
+      </div>
+      <div class="input-group">
+        <label>序列号 (seq)</label>
+        <input type="number" id="seqNum" value="100" placeholder="e.g. 100">
+      </div>
+      <div class="input-group">
+        <label>确认号 (ack)</label>
+        <input type="number" id="ackNum" value="0" placeholder="e.g. 0">
+      </div>
+      <div class="flags-row">
+        <label class="flag-check"><input type="checkbox" id="fURG">URG</label>
+        <label class="flag-check"><input type="checkbox" id="fACK">ACK</label>
+        <label class="flag-check"><input type="checkbox" id="fPSH">PSH</label>
+        <label class="flag-check"><input type="checkbox" id="fRST">RST</label>
+        <label class="flag-check"><input type="checkbox" id="fSYN">SYN</label>
+        <label class="flag-check"><input type="checkbox" id="fFIN">FIN</label>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn primary" onclick="analyzePacket()">分析</button>
+        <button class="btn" onclick="reset分析r()">清空</button>
+      </div>
+      <div class="preset-btns">
+        <span style="font-size:0.7rem;color:var(--text-faint);line-height:2;">预设:</span>
+        <button class="btn" onclick="preset('syn')">SYN</button>
+        <button class="btn" onclick="preset('synack')">SYN+ACK</button>
+        <button class="btn" onclick="preset('ack')">ACK</button>
+        <button class="btn" onclick="preset('fin')">FIN</button>
+        <button class="btn" onclick="preset('rst')">RST</button>
+        <button class="btn" onclick="preset('data')">数据 (PSH+ACK)</button>
+      </div>
+    </div>
+    <div class="output-panel" id="outputPanel">
+      <h3 style="font-size:0.95rem;margin-bottom:16px;color:var(--emerald);">分析结果</h3>
+      <div style="color:var(--text-faint);text-align:center;padding:40px;">输入报文信息后点击"分析"...</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+// Tab switching
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'sm') drawStateMachine();
+  });
+});
+
+// ============== Module 1: 握手模拟器 ==============
+const steps = [
+  { dir: '→', flags: 'SYN', color: '#22d3ee', seq: 'seq=x', ack: 'ack=0', cState: 'synsent', sState: 'synrcvd', cLabel: 'SYN_SENT', sLabel: 'SYN_RCVD', desc: '客户端发送 SYN 发起连接' },
+  { dir: '←', flags: 'SYN+ACK', color: '#34d399', seq: 'seq=y', ack: 'ack=x+1', cState: 'synsent', sState: 'synrcvd', cLabel: 'SYN_SENT', sLabel: 'SYN_RCVD', desc: '服务器回复 SYN+ACK' },
+  { dir: '→', flags: 'ACK', color: '#a78bfa', seq: 'seq=x+1', ack: 'ack=y+1', cState: 'established', sState: 'established', cLabel: 'ESTABLISHED', sLabel: 'ESTABLISHED', desc: '客户端确认。连接已建立！' },
+  { dir: '→', flags: 'FIN', color: '#fb7185', seq: 'seq=u', ack: 'ack=v', cState: 'finwait1', sState: 'established', cLabel: 'FIN_WAIT_1', sLabel: 'ESTABLISHED', desc: '客户端发送 FIN 关闭连接' },
+  { dir: '←', flags: 'ACK', color: '#fbbf24', seq: 'seq=v', ack: 'ack=u+1', cState: 'finwait2', sState: 'closewait', cLabel: 'FIN_WAIT_2', sLabel: 'CLOSE_WAIT', desc: '服务器确认 FIN。客户端等待。' },
+  { dir: '←', flags: 'FIN', color: '#fb7185', seq: 'seq=w', ack: 'ack=u+1', cState: 'timewait', sState: 'lastack', cLabel: 'TIME_WAIT', sLabel: 'LAST_ACK', desc: '服务器发送 FIN。客户端进入 TIME_WAIT。' },
+  { dir: '→', flags: 'ACK', color: '#94a3b8', seq: 'seq=u+1', ack: 'ack=w+1', cState: 'timewait', sState: 'closed', cLabel: 'TIME_WAIT', sLabel: 'CLOSED', desc: '客户端发送最终 ACK。服务器关闭。' },
+  { dir: '—', flags: '⏳', color: '#60a5fa', seq: '2MSL', ack: '≈ 4 min', cState: 'closed', sState: 'closed', cLabel: 'CLOSED', sLabel: 'CLOSED', desc: '客户端等待 2MSL 后关闭。' },
+];
+
+let stepIdx = 0;
+let autoTimer = null;
+let speed = 800;
+
+function setState(elId, stateClass, label) {
+  const el = document.getElementById(elId);
+  el.className = 'state ' + stateClass;
+  el.textContent = label;
+}
+
+function nextStep() {
+  if (stepIdx >= steps.length) return;
+  const s = steps[stepIdx];
+  setState('clientState', s.cState, s.cLabel);
+  setState('serverState', s.sState, s.sLabel);
+
+  const tl = document.getElementById('timeline');
+  if (stepIdx === 0) tl.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = 'msg-line';
+  div.innerHTML = `<span class="step-num">${stepIdx+1}</span>
+    <span class="direction">${s.dir}</span>
+    <span class="flags" style="color:${s.color}">${s.flags}</span>
+    <span class="seq-ack">${s.seq} &nbsp; ${s.ack}</span>
+    <span style="font-size:0.7rem;color:var(--text-faint)">${s.desc}</span>`;
+  tl.appendChild(div);
+  tl.scrollTop = tl.scrollHeight;
+
+  // Highlight active card
+  if (s.dir === '→' || s.dir === '—') {
+    document.getElementById('clientCard').classList.add('active');
+    document.getElementById('serverCard').classList.remove('active');
+  } else if (s.dir === '←') {
+    document.getElementById('serverCard').classList.add('active');
+    document.getElementById('clientCard').classList.remove('active');
+  }
+
+  stepIdx++;
+  if (stepIdx === steps.length) {
+    document.getElementById('btnNext').textContent = '完成';
+    document.getElementById('btnNext').disabled = true;
+    document.getElementById('btnAuto').disabled = true;
+    stopAuto();
+  } else {
+    document.getElementById('btnNext').textContent = '下一步';
+  }
+}
+
+function resetSim() {
+  stopAuto();
+  stepIdx = 0;
+  setState('clientState', 'closed', 'CLOSED');
+  setState('serverState', 'listen', 'LISTEN');
+  document.getElementById('timeline').innerHTML = '<div style="color:var(--text-faint);text-align:center;padding:40px;">点击"开始"启动握手...</div>';
+  document.getElementById('btnNext').textContent = '开始握手';
+  document.getElementById('btnNext').disabled = false;
+  document.getElementById('btnAuto').disabled = false;
+  document.getElementById('clientCard').classList.remove('active');
+  document.getElementById('serverCard').classList.remove('active');
+}
+
+function toggleAuto() {
+  if (autoTimer) { stopAuto(); return; }
+  document.getElementById('btnAuto').textContent = '⏸ Stop';
+  if (stepIdx === 0) nextStep();
+  autoTimer = setInterval(() => {
+    if (stepIdx >= steps.length) { stopAuto(); return; }
+    nextStep();
+  }, speed);
+}
+
+function stopAuto() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  document.getElementById('btnAuto').textContent = '自动播放';
+}
+
+function updateSpeed() {
+  speed = parseInt(document.getElementById('speedSelect').value);
+  if (autoTimer) { stopAuto(); toggleAuto(); }
+}
+
+// ============== Module 2: 状态机 ==============
+const stateData = {
+  CLOSED: { cn: '关闭', desc: '初始/最终状态，无连接存在', enter: '系统启动 / 连接完全终止', exit: '主动打开 → SYN_SENT；被动打开 → LISTEN', flags: '无', duration: '无限期（空闲状态）', color: '#64748b' },
+  LISTEN: { cn: '监听', desc: '服务器等待客户端连接请求', enter: '被动打开（如 socket bind+listen）', exit: '收到 SYN → SYN_RCVD；发送 SYN → SYN_SENT', flags: '无', duration: '持续到收到 SYN 或进程关闭', color: '#64748b' },
+  SYN_SENT: { cn: '已发送SYN', desc: '客户端发出 SYN，等待 SYN+ACK', enter: '主动打开（connect 调用）', exit: '收到 SYN+ACK → ESTABLISHED；收到 SYN → SYN_RCVD（同时打开）', flags: 'SYN', duration: '极短（1 RTT 内）', color: '#fbbf24' },
+  SYN_RCVD: { cn: '已接收SYN', desc: '服务器收到 SYN，发出 SYN+ACK，等待 ACK', enter: '收到 SYN 并回复 SYN+ACK', exit: '收到 ACK → ESTABLISHED；收到 FIN → FIN_WAIT_1', flags: 'SYN+ACK', duration: '极短（1 RTT 内）', color: '#fbbf24' },
+  ESTABLISHED: { cn: '已建立', desc: '连接已建立，双向数据传输', enter: '三次握手完成', exit: '发送 FIN → FIN_WAIT_1；收到 FIN → CLOSE_WAIT', flags: 'ACK（数据传输中）', duration: '不定（应用层决定）', color: '#34d399' },
+  FIN_WAIT_1: { cn: '等待FIN_1', desc: '主动关闭方已发送 FIN，等待 ACK', enter: '主动关闭（close 调用）', exit: '收到 ACK → FIN_WAIT_2；收到 FIN → CLOSING（同时关闭）', flags: 'FIN', duration: '极短', color: '#fb7185' },
+  FIN_WAIT_2: { cn: '等待FIN_2', desc: '已收到 ACK，等待对方 FIN', enter: 'FIN_WAIT_1 收到 ACK', exit: '收到 FIN → TIME_WAIT', flags: 'ACK', duration: '不定（取决于对方何时 close）', color: '#fb7185' },
+  CLOSING: { cn: '同时关闭中', desc: '双方同时发送 FIN（同时关闭）', enter: 'FIN_WAIT_1 收到 FIN（双方同时关闭）', exit: '收到 ACK → TIME_WAIT', flags: 'FIN+ACK', duration: '极短（罕见）', color: '#f43f5e' },
+  TIME_WAIT: { cn: '等待超时', desc: '主动关闭方等待 2MSL 确保对方收到 ACK', enter: 'FIN_WAIT_2 收到 FIN / CLOSING 收到 ACK', exit: '2MSL 超时 → CLOSED', flags: 'ACK', duration: '2MSL ≈ 4 分钟（Linux 默认 60s）', color: '#60a5fa' },
+  CLOSE_WAIT: { cn: '等待关闭', desc: '被动关闭方已收到 FIN 并回复 ACK，等待应用层 close', enter: '收到 FIN 并回复 ACK', exit: '应用层 close → LAST_ACK', flags: 'ACK', duration: '不定（取决于应用层），过长即 CLOSE_WAIT 泄漏', color: '#fb7185' },
+  LAST_ACK: { cn: '最后确认', desc: '被动关闭方已发送 FIN，等待 ACK', enter: 'CLOSE_WAIT + 应用 close', exit: '收到 ACK → CLOSED', flags: 'FIN', duration: '极短', color: '#fb7185' },
+};
+
+const statePositions = {
+  CLOSED: { x: 460, y: 440 },
+  LISTEN: { x: 150, y: 440 },
+  SYN_SENT: { x: 280, y: 280 },
+  SYN_RCVD: { x: 640, y: 280 },
+  ESTABLISHED: { x: 460, y: 160 },
+  FIN_WAIT_1: { x: 150, y: 200 },
+  FIN_WAIT_2: { x: 60, y: 80 },
+  CLOSING: { x: 770, y: 200 },
+  TIME_WAIT: { x: 460, y: 80 },
+  CLOSE_WAIT: { x: 870, y: 300 },
+  LAST_ACK: { x: 870, y: 120 },
+};
+
+// Transitions: [from, to, label, style (solid/dashed), color]
+const transitions = [
+  ['CLOSED', 'LISTEN', '被动打开', 'solid', '#64748b'],
+  ['CLOSED', 'SYN_SENT', '主动打开', 'solid', '#64748b'],
+  ['LISTEN', 'SYN_RCVD', '收 SYN / 发 SYN+ACK', 'solid', '#fbbf24'],
+  ['LISTEN', 'SYN_SENT', '发 SYN', 'solid', '#fbbf24'],
+  ['SYN_SENT', 'ESTABLISHED', '收 SYN+ACK / 发 ACK', 'solid', '#34d399'],
+  ['SYN_SENT', 'SYN_RCVD', '收 SYN / 发 SYN+ACK', 'dashed', '#60a5fa'],
+  ['SYN_RCVD', 'ESTABLISHED', '收 ACK', 'solid', '#34d399'],
+  ['ESTABLISHED', 'FIN_WAIT_1', '发 FIN（主动关闭）', 'solid', '#fb7185'],
+  ['ESTABLISHED', 'CLOSE_WAIT', '收 FIN / 发 ACK', 'solid', '#fb7185'],
+  ['FIN_WAIT_1', 'FIN_WAIT_2', '收 ACK', 'solid', '#fb7185'],
+  ['FIN_WAIT_1', 'CLOSING', '收 FIN（同时关闭）', 'dashed', '#f43f5e'],
+  ['FIN_WAIT_2', 'TIME_WAIT', '收 FIN / 发 ACK', 'solid', '#60a5fa'],
+  ['CLOSING', 'TIME_WAIT', '收 ACK', 'solid', '#60a5fa'],
+  ['TIME_WAIT', 'CLOSED', '2MSL 超时', 'solid', '#64748b'],
+  ['CLOSE_WAIT', 'LAST_ACK', '发 FIN', 'solid', '#fb7185'],
+  ['LAST_ACK', 'CLOSED', '收 ACK', 'solid', '#64748b'],
+];
+
+function drawStateMachine() {
+  const container = document.getElementById('stateMachineContainer');
+  const W = 960, H = 520;
+  const R = 36; // node radius
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;max-width:960px;">
+<style>
+  text { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; }
+  .state-node { cursor: pointer; }
+  .state-node circle { transition: all 0.3s; }
+  .state-node:hover circle { filter: drop-shadow(0 0 10px currentColor); transform: scale(1.05); transform-origin: center; }
+  .state-node:hover text.title { fill: #ffffff; }
+  .trans-label { font-size: 7px; fill: #64748b; }
+</style>
+<rect width="${W}" height="${H}" fill="#1e293b" rx="8"/>
+<text x="${W/2}" y="24" fill="#94a3b8" font-size="10" font-weight="600" text-anchor="middle">TCP 状态机 — 11 States</text>
+<text x="${W/2}" y="38" fill="#64748b" font-size="7" text-anchor="middle">Solid = Normal path &nbsp;|&nbsp; Dashed + Blue = Simultaneous Open (SYN_SENT→SYN_RCVD) &nbsp;|&nbsp; Dashed + Red = Simultaneous Close (FIN_WAIT_1→CLOSING)</text>`;
+
+  // Arrow marker defs
+  const markerColors = { solid: '#94a3b8', dashed: '#60a5fa', 'dashed-red': '#f43f5e' };
+  for (const [k, clr] of Object.entries(markerColors)) {
+    svg += `<defs><marker id="arrow-${k}" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="${clr}"/></marker></defs>`;
+  }
+
+  // Draw transitions
+  for (const [from, to, label, style, color] of transitions) {
+    const fp = statePositions[from], tp = statePositions[to];
+    const dx = tp.x - fp.x, dy = tp.y - fp.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const ux = dx/dist, uy = dy/dist;
+    const sx = fp.x + ux*R, sy = fp.y + uy*R;
+    const ex = tp.x - ux*R, ey = tp.y - uy*R;
+
+    const markerId = style === 'dashed' ? (color === '#f43f5e' ? 'arrow-dashed-red' : 'arrow-dashed') : 'arrow-solid';
+    const strokeClr = style === 'dashed' ? (color === '#f43f5e' ? '#f43f5e' : '#60a5fa') : '#475569';
+    const dash = style === 'dashed' ? '6,3' : 'none';
+
+    svg += `<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="${strokeClr}" stroke-width="1.5" stroke-dasharray="${dash}" marker-end="url(#${markerId})"/>`;
+    // Label at midpoint, offset perpendicular
+    const mx = (sx+ex)/2, my = (sy+ey)/2;
+    const px = -uy*10, py = ux*10;
+    svg += `<text x="${mx+px}" y="${my+py}" class="trans-label" text-anchor="middle">${label}</text>`;
+  }
+
+  // Draw state nodes
+  for (const [name, pos] of Object.entries(statePositions)) {
+    const d = stateData[name];
+    const isSpecial = (name === 'ESTABLISHED' || name === 'CLOSED' || name === 'LISTEN');
+    const r = isSpecial ? R+2 : R;
+    const clr = d.color;
+    svg += `<g class="state-node" onclick="showDetail('${name}')" style="color:${clr};">
+      <circle cx="${pos.x}" cy="${pos.y}" r="${r}" fill="#0f172a" stroke="${clr}" stroke-width="${isSpecial?2:1.5}"/>
+      <text x="${pos.x}" y="${pos.y-4}" class="title" fill="${clr}" font-size="${isSpecial?9:8}" font-weight="600" text-anchor="middle">${name.replace(/_/g,' ')}</text>
+      <text x="${pos.x}" y="${pos.y+10}" fill="#94a3b8" font-size="6.5" text-anchor="middle">${d.cn}</text>
+    </g>`;
+  }
+
+  // Legend
+  svg += `<g transform="translate(680, 440)">
+    <rect x="0" y="0" width="260" height="70" rx="6" fill="rgba(15,23,42,0.8)" stroke="#334155" stroke-width="0.5"/>
+    <text x="130" y="16" fill="#94a3b8" font-size="8" font-weight="600" text-anchor="middle">Legend</text>
+    <line x1="10" y1="30" x2="40" y2="30" stroke="#475569" stroke-width="1.5"/>
+    <text x="48" y="33" fill="#94a3b8" font-size="7">Normal</text>
+    <line x1="100" y1="30" x2="130" y2="30" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="6,3"/>
+    <text x="138" y="33" fill="#94a3b8" font-size="7">Simult. Open</text>
+    <line x1="10" y1="48" x2="40" y2="48" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="6,3"/>
+    <text x="48" y="51" fill="#94a3b8" font-size="7">Simult. Close</text>
+    <circle cx="130" cy="48" r="4" fill="#0f172a" stroke="#34d399" stroke-width="1"/>
+    <text x="140" y="51" fill="#94a3b8" font-size="7">Hover/tap for detail</text>
+  </g>`;
+
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function showDetail(name) {
+  const d = stateData[name];
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('detailCard').classList.add('show');
+  document.getElementById('detailContent').innerHTML = `
+    <h3 style="color:${d.color}">${name.replace(/_/g,' ')} <span style="font-size:0.8rem;color:var(--text-dim)">${d.cn}</span></h3>
+    <p style="font-size:0.8rem;color:var(--text-dim);margin-bottom:12px;">${d.desc}</p>
+    <div class="info-row"><span>Enter: </span>${d.enter}</div>
+    <div class="info-row"><span>Exit: </span>${d.exit}</div>
+    <div class="info-row"><span>Flags: </span>${d.flags}</div>
+    <div class="info-row"><span>Duration: </span>${d.duration}</div>`;
+}
+
+function closeDetail() {
+  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('detailCard').classList.remove('show');
+}
+document.getElementById('overlay').addEventListener('click', closeDetail);
+
+// ============== Module 3: 抓包解析器 ==============
+function analyzePacket() {
+  const syn = document.getElementById('fSYN').checked;
+  const ack = document.getElementById('fACK').checked;
+  const fin = document.getElementById('fFIN').checked;
+  const rst = document.getElementById('fRST').checked;
+  const psh = document.getElementById('fPSH').checked;
+  const urg = document.getElementById('fURG').checked;
+  const seq = parseInt(document.getElementById('seqNum').value) || 0;
+  const ackNum = parseInt(document.getElementById('ackNum').value) || 0;
+  const srcPort = document.getElementById('srcPort').value;
+  const dstPort = document.getElementById('dstPort').value;
+
+  let phase = '', phaseClass = '', description = '', next = '';
+
+  if (rst) {
+    phase = '连接重置 (RST)';
+    phaseClass = 'phase-rst';
+    description = 'RST flag set. Connection is being forcibly reset. The receiver should immediately drop the connection without further handshake.';
+    next = '连接终止。双方回到 CLOSED。';
+  } else if (syn && !ack) {
+    phase = 'SYN — Handshake Step 1';
+    phaseClass = 'phase-syn';
+    description = '初始 SYN 段。发送方请求同步序列号。三次握手第1步。';
+    next = '预期：接收方 SYN+ACK (seq=y, ack=seq+1)';
+  } else if (syn && ack) {
+    phase = 'SYN+ACK — Handshake Step 2';
+    phaseClass = 'phase-synack';
+    description = '服务器确认 SYN 并发送自己的 SYN。三次握手第2步。';
+    next = '预期：客户端 ACK (ack=seq+1)。此后进入 ESTABLISHED。';
+  } else if (fin && ack) {
+    phase = 'FIN+ACK — Wave Step 3 (or Simultaneous Close)';
+    phaseClass = 'phase-fin';
+    description = 'FIN with ACK. Could be step 3 of four-way wave (LAST_ACK state) or part of simultaneous close (CLOSING state).';
+    next = '若 LAST_ACK：预期最终 ACK，然后 CLOSED。若 CLOSING：预期 ACK，然后 TIME_WAIT。';
+  } else if (fin) {
+    phase = 'FIN — Wave Step 1 (Active Close)';
+    phaseClass = 'phase-fin';
+    description = 'FIN flag set without ACK (or ACK not set as control flag). Sender initiates connection termination. Enters FIN_WAIT_1.';
+    next = '预期：接收方 ACK (FIN_WAIT_1→FIN_WAIT_2) 或接收方 FIN (FIN_WAIT_1→CLOSING)。';
+  } else if (ack && !syn && !fin) {
+    if (ackNum > 0) {
+      phase = 'ACK — Handshake Step 3 / Data ACK';
+      phaseClass = 'phase-ack';
+      description = '纯 ACK 段。可能是三次握手第3步（完成 ESTABLISHED），或在已建立连接中确认数据。';
+      next = '若在握手阶段：连接→ESTABLISHED。若在数据传输阶段：滑动窗口前进。';
+    } else {
+      phase = 'ACK (ack=0) — Anomaly';
+      phaseClass = 'phase-rst';
+      description = 'ACK flag set but acknowledgment number is 0. This is unusual in normal TCP operation. May indicate a crafted or malformed packet.';
+      next = '检查报文有效性。通常 ACK 应携带有效的确认号。';
+    }
+  } else if (psh && ack) {
+    phase = '数据段 (PSH+ACK) — ESTABLISHED';
+    phaseClass = 'phase-estab';
+    description = 'PSH+ACK during ESTABLISHED state. Carries application data with push flag, requesting immediate delivery to application layer.';
+    next = '正常数据流。预期接收方 ACK 确认接收。';
+  } else {
+    phase = '未知 / 其他';
+    phaseClass = '';
+    description = '标志位组合不匹配标准握手或挥手步骤。可能是保活探测、窗口探测或畸形报文。';
+    next = '检查标志位组合。常见：URG（紧急数据）、裸 ACK（保活探测）。';
+  }
+
+  const flagsArr = [];
+  if (urg) flagsArr.push('URG');
+  if (ack) flagsArr.push('ACK');
+  if (psh) flagsArr.push('PSH');
+  if (rst) flagsArr.push('RST');
+  if (syn) flagsArr.push('SYN');
+  if (fin) flagsArr.push('FIN');
+
+  document.getElementById('outputPanel').innerHTML = `
+    <h3 style="font-size:0.95rem;margin-bottom:16px;color:var(--emerald);">分析结果</h3>
+    <div class="result-item"><div class="label">Phase</div><div class="value ${phaseClass}">${phase}</div></div>
+    <div class="result-item"><div class="label">Flags</div><div class="value">${flagsArr.length ? flagsArr.join(' | ') : '(none)'}</div></div>
+    <div class="result-item"><div class="label">seq / ack</div><div class="value">${seq} / ${ackNum}</div></div>
+    <div class="result-item"><div class="label">Ports</div><div class="value">${srcPort} → ${dstPort}</div></div>
+    <div class="result-item"><div class="label">Description</div><div style="font-size:0.8rem;color:var(--text-dim);margin-top:4px;">${description}</div></div>
+    <div class="result-item"><div class="label">Next</div><div style="font-size:0.8rem;color:var(--text-dim);margin-top:4px;">${next}</div></div>`;
+}
+
+function preset(type) {
+  const cbs = { URG: false, ACK: false, PSH: false, RST: false, SYN: false, FIN: false };
+  let seq = 100, ack = 0;
+  switch(type) {
+    case 'syn': cbs.SYN = true; seq = 100; ack = 0; break;
+    case 'synack': cbs.SYN = true; cbs.ACK = true; seq = 200; ack = 101; break;
+    case 'ack': cbs.ACK = true; seq = 101; ack = 201; break;
+    case 'fin': cbs.FIN = true; seq = 500; ack = 300; break;
+    case 'rst': cbs.RST = true; cbs.ACK = true; seq = 0; ack = 0; break;
+    case 'data': cbs.PSH = true; cbs.ACK = true; seq = 101; ack = 201; break;
+  }
+  for (const [f, v] of Object.entries(cbs)) {
+    document.getElementById('f'+f).checked = v;
+  }
+  document.getElementById('seqNum').value = seq;
+  document.getElementById('ackNum').value = ack;
+  analyzePacket();
+}
+
+function reset分析r() {
+  ['URG','ACK','PSH','RST','SYN','FIN'].forEach(f => document.getElementById('f'+f).checked = false);
+  document.getElementById('seqNum').value = 100;
+  document.getElementById('ackNum').value = 0;
+  document.getElementById('outputPanel').innerHTML = '<h3 style="font-size:0.95rem;margin-bottom:16px;color:var(--emerald);">分析结果</h3><div style="color:var(--text-faint);text-align:center;padding:40px;">输入报文信息后点击"分析"...</div>';
+}
+
+// Init state machine on load
+drawStateMachine();
+</script>
+</body>
+</html>
